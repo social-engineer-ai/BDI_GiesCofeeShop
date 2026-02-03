@@ -17,8 +17,13 @@ DB_CONFIG = {
     'user': os.environ.get('DB_USER', 'admin'),
     'password': os.environ.get('DB_PASSWORD', 'GiesCoffee2026!'),
     'database': os.environ.get('DB_NAME', 'gies_coffee_shop'),
-    'cursorclass': pymysql.cursors.DictCursor,
     'connect_timeout': 5,
+}
+
+# Separate config for INSERT operations (needs DictCursor for cursor.execute)
+DB_CONFIG_INSERT = {
+    **DB_CONFIG,
+    'cursorclass': pymysql.cursors.DictCursor,
 }
 
 
@@ -39,7 +44,7 @@ def run_query(sql, params=None):
 
 def run_insert(sql, params=None):
     """Execute an INSERT query."""
-    conn = get_connection()
+    conn = pymysql.connect(**DB_CONFIG_INSERT)
     try:
         with conn.cursor() as cur:
             cur.execute(sql, params)
