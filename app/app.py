@@ -9,6 +9,7 @@ import streamlit as st
 import pymysql
 import pandas as pd
 import os
+from decimal import Decimal
 
 # Database configuration
 DB_CONFIG = {
@@ -30,7 +31,8 @@ def run_query(sql, params=None):
     """Execute a SELECT query and return results as DataFrame."""
     conn = get_connection()
     try:
-        return pd.read_sql(sql, conn, params=params)
+        df = pd.read_sql(sql, conn, params=params)
+        return df
     finally:
         conn.close()
 
@@ -44,6 +46,28 @@ def run_insert(sql, params=None):
         conn.commit()
     finally:
         conn.close()
+
+
+def safe_float(value, default=0.0):
+    """Safely convert a value to float, handling Decimal and None."""
+    if value is None:
+        return default
+    if isinstance(value, Decimal):
+        return float(value)
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return default
+
+
+def safe_int(value, default=0):
+    """Safely convert a value to int, handling None."""
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return default
 
 
 # Page configuration
@@ -75,12 +99,12 @@ with tab1:
 
         # Total Revenue
         rev_df = run_query("SELECT SUM(total_amount) as rev FROM daily_sales")
-        total_rev = float(rev_df['rev'].iloc[0] or 0)
+        total_rev = safe_float(rev_df.iloc[0]['rev']) if not rev_df.empty else 0.0
         col1.metric("Total Revenue", f"${total_rev:,.2f}")
 
         # Total Transactions
         trans_df = run_query("SELECT COUNT(*) as cnt FROM daily_sales")
-        total_trans = int(trans_df['cnt'].iloc[0] or 0)
+        total_trans = safe_int(trans_df.iloc[0]['cnt']) if not trans_df.empty else 0
         col2.metric("Total Transactions", f"{total_trans:,}")
 
         # Average Order Value
@@ -89,7 +113,7 @@ with tab1:
 
         # Menu Item Count
         menu_df = run_query("SELECT COUNT(*) as cnt FROM menu_items")
-        menu_count = int(menu_df['cnt'].iloc[0] or 0)
+        menu_count = safe_int(menu_df.iloc[0]['cnt']) if not menu_df.empty else 0
         col4.metric("Menu Items", f"{menu_count}")
 
         st.divider()
@@ -134,24 +158,27 @@ with tab2:
             ORDER BY category, product_name
         """)
 
-        # Cast price to float for display
-        menu_items['price'] = menu_items['price'].astype(float)
+        if menu_items.empty:
+            st.warning("No menu items found.")
+        else:
+            # Convert price column to float
+            menu_items['price'] = menu_items['price'].apply(safe_float)
 
-        # Group by category
-        categories = menu_items['category'].unique()
-        for category in sorted(categories):
-            st.subheader(f"{category}")
-            cat_items = menu_items[menu_items['category'] == category].copy()
-            cat_items['price'] = cat_items['price'].apply(lambda x: f"${x:.2f}")
-            st.dataframe(
-                cat_items[['product_name', 'price', 'status']].rename(columns={
-                    'product_name': 'Product',
-                    'price': 'Price',
-                    'status': 'Status'
-                }),
-                hide_index=True,
-                use_container_width=True
-            )
+            # Group by category
+            categories = menu_items['category'].unique()
+            for category in sorted(categories):
+                st.subheader(f"{category}")
+                cat_items = menu_items[menu_items['category'] == category].copy()
+                cat_items['price_display'] = cat_items['price'].apply(lambda x: f"${x:.2f}")
+                st.dataframe(
+                    cat_items[['product_name', 'price_display', 'status']].rename(columns={
+                        'product_name': 'Product',
+                        'price_display': 'Price',
+                        'status': 'Status'
+                    }),
+                    hide_index=True,
+                    use_container_width=True
+                )
 
     except Exception as e:
         st.error(f"Error loading menu: {e}")
@@ -169,8 +196,12 @@ with tab3:
             GROUP BY sale_date
             ORDER BY sale_date
         """)
-        daily_rev['revenue'] = daily_rev['revenue'].astype(float)
-        st.bar_chart(daily_rev.set_index('sale_date')['revenue'])
+
+        if not daily_rev.empty:
+            daily_rev['revenue'] = daily_rev['revenue'].apply(safe_float)
+            st.bar_chart(daily_rev.set_index('sale_date')['revenue'])
+        else:
+            st.info("No sales data available.")
 
         st.divider()
 
@@ -186,18 +217,20 @@ with tab3:
                 ORDER BY revenue DESC
                 LIMIT 10
             """)
-            top_products['revenue'] = top_products['revenue'].astype(float)
-            top_products['units_sold'] = top_products['units_sold'].astype(int)
-            top_products['revenue'] = top_products['revenue'].apply(lambda x: f"${x:.2f}")
-            st.dataframe(
-                top_products.rename(columns={
-                    'product_name': 'Product',
-                    'revenue': 'Revenue',
-                    'units_sold': 'Units Sold'
-                }),
-                hide_index=True,
-                use_container_width=True
-            )
+            if not top_products.empty:
+                top_products['revenue'] = top_products['revenue'].apply(safe_float)
+                top_products['units_sold'] = top_products['units_sold'].apply(safe_int)
+                display_df = top_products.copy()
+                display_df['revenue'] = display_df['revenue'].apply(lambda x: f"${x:.2f}")
+                st.dataframe(
+                    display_df.rename(columns={
+                        'product_name': 'Product',
+                        'revenue': 'Revenue',
+                        'units_sold': 'Units Sold'
+                    }),
+                    hide_index=True,
+                    use_container_width=True
+                )
 
         with col2:
             # Payment methods
@@ -208,18 +241,20 @@ with tab3:
                 GROUP BY payment_method
                 ORDER BY revenue DESC
             """)
-            payment_df['revenue'] = payment_df['revenue'].astype(float)
-            payment_df['transactions'] = payment_df['transactions'].astype(int)
-            payment_df['revenue'] = payment_df['revenue'].apply(lambda x: f"${x:.2f}")
-            st.dataframe(
-                payment_df.rename(columns={
-                    'payment_method': 'Payment Method',
-                    'transactions': 'Transactions',
-                    'revenue': 'Revenue'
-                }),
-                hide_index=True,
-                use_container_width=True
-            )
+            if not payment_df.empty:
+                payment_df['revenue'] = payment_df['revenue'].apply(safe_float)
+                payment_df['transactions'] = payment_df['transactions'].apply(safe_int)
+                display_df = payment_df.copy()
+                display_df['revenue'] = display_df['revenue'].apply(lambda x: f"${x:.2f}")
+                st.dataframe(
+                    display_df.rename(columns={
+                        'payment_method': 'Payment Method',
+                        'transactions': 'Transactions',
+                        'revenue': 'Revenue'
+                    }),
+                    hide_index=True,
+                    use_container_width=True
+                )
 
         st.divider()
 
@@ -232,21 +267,23 @@ with tab3:
             GROUP BY customer_type
             ORDER BY revenue DESC
         """)
-        customer_df['revenue'] = customer_df['revenue'].astype(float)
-        customer_df['transactions'] = customer_df['transactions'].astype(int)
-        customer_df['avg_order'] = customer_df['avg_order'].astype(float)
-        customer_df['revenue'] = customer_df['revenue'].apply(lambda x: f"${x:.2f}")
-        customer_df['avg_order'] = customer_df['avg_order'].apply(lambda x: f"${x:.2f}")
-        st.dataframe(
-            customer_df.rename(columns={
-                'customer_type': 'Customer Type',
-                'transactions': 'Transactions',
-                'revenue': 'Total Revenue',
-                'avg_order': 'Avg Order'
-            }),
-            hide_index=True,
-            use_container_width=True
-        )
+        if not customer_df.empty:
+            customer_df['revenue'] = customer_df['revenue'].apply(safe_float)
+            customer_df['transactions'] = customer_df['transactions'].apply(safe_int)
+            customer_df['avg_order'] = customer_df['avg_order'].apply(safe_float)
+            display_df = customer_df.copy()
+            display_df['revenue'] = display_df['revenue'].apply(lambda x: f"${x:.2f}")
+            display_df['avg_order'] = display_df['avg_order'].apply(lambda x: f"${x:.2f}")
+            st.dataframe(
+                display_df.rename(columns={
+                    'customer_type': 'Customer Type',
+                    'transactions': 'Transactions',
+                    'revenue': 'Total Revenue',
+                    'avg_order': 'Avg Order'
+                }),
+                hide_index=True,
+                use_container_width=True
+            )
 
     except Exception as e:
         st.error(f"Error loading analytics: {e}")
@@ -267,15 +304,19 @@ with tab4:
         if products.empty:
             st.warning("No products available.")
         else:
-            # Create product options with prices for reference
+            # Convert price to float
+            products['price'] = products['price'].apply(safe_float)
+
+            # Create product options
             product_names = products['product_name'].tolist()
 
             # Order form
-            with st.form("order_form"):
+            with st.form("order_form", clear_on_submit=True):
                 selected_product = st.selectbox("Choose a Product", product_names)
 
-                # Show price for selected product
-                selected_price = float(products[products['product_name'] == selected_product]['price'].iloc[0])
+                # Get price for selected product
+                price_row = products[products['product_name'] == selected_product]
+                selected_price = safe_float(price_row['price'].iloc[0]) if not price_row.empty else 0.0
                 st.write(f"Price: **${selected_price:.2f}**")
 
                 quantity = st.number_input("Quantity", min_value=1, max_value=20, value=1)
@@ -285,19 +326,23 @@ with tab4:
                 total = selected_price * quantity
                 st.write(f"**Order Total: ${total:.2f}**")
 
+                # Submit button MUST be inside the form
                 submitted = st.form_submit_button("Place Order", type="primary")
 
-                if submitted:
-                    if not customer_name.strip():
-                        st.error("Please enter your name.")
-                    else:
-                        # Insert order
+            # Handle submission outside the form context
+            if submitted:
+                if not customer_name or not customer_name.strip():
+                    st.error("Please enter your name.")
+                else:
+                    try:
                         run_insert(
                             "INSERT INTO customer_orders (customer_name, product_name, quantity) VALUES (%s, %s, %s)",
                             (customer_name.strip(), selected_product, quantity)
                         )
                         st.success(f"Order placed successfully! {quantity}x {selected_product} for {customer_name}")
                         st.balloons()
+                    except Exception as insert_err:
+                        st.error(f"Failed to place order: {insert_err}")
 
     except Exception as e:
         st.error(f"Error with order form: {e}")
@@ -329,10 +374,10 @@ with tab5:
         if orders.empty:
             st.info("No orders yet. Be the first to place an order!")
         else:
-            # Cast numeric columns
-            orders['quantity'] = orders['quantity'].astype(int)
-            orders['unit_price'] = orders['unit_price'].astype(float)
-            orders['total'] = orders['total'].astype(float)
+            # Cast numeric columns safely
+            orders['quantity'] = orders['quantity'].apply(safe_int)
+            orders['unit_price'] = orders['unit_price'].apply(safe_float)
+            orders['total'] = orders['total'].apply(safe_float)
 
             # Format for display
             display_orders = orders.copy()
