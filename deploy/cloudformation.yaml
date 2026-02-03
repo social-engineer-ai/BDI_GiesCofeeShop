@@ -1,0 +1,89 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Gies Coffee Shop Demo - BADM 558/358 Week 3
+  Launches an EC2 instance with MySQL + Streamlit pre-configured.
+
+Parameters:
+  InstanceName:
+    Type: String
+    Default: GiesCoffeeShop-Demo
+    Description: Name tag for the EC2 instance
+
+  InstanceType:
+    Type: String
+    Default: t2.micro
+    AllowedValues: [t2.micro, t2.small, t3.micro, t3.small]
+    Description: EC2 instance type
+
+  KeyPair:
+    Type: String
+    Default: ''
+    Description: (Optional) EC2 Key Pair for SSH access
+
+Conditions:
+  HasKeyPair: !Not [!Equals [!Ref KeyPair, '']]
+
+Resources:
+  CoffeeShopSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Gies Coffee Shop - Allow HTTP 8501, MySQL 3306, SSH 22
+      GroupName: !Sub '${InstanceName}-SG'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+          Description: SSH access
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          CidrIp: 0.0.0.0/0
+          Description: MySQL access for student CloudShell
+        - IpProtocol: tcp
+          FromPort: 8501
+          ToPort: 8501
+          CidrIp: 0.0.0.0/0
+          Description: Streamlit web application
+
+  CoffeeShopInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: !Sub '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}'
+      SecurityGroupIds:
+        - !GetAtt CoffeeShopSecurityGroup.GroupId
+      KeyName: !If [HasKeyPair, !Ref KeyPair, !Ref 'AWS::NoValue']
+      Tags:
+        - Key: Name
+          Value: !Ref InstanceName
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          exec > /var/log/gies-bootstrap.log 2>&1
+          set -ex
+          echo "=== Bootstrap started at $(date) ==="
+          sudo dnf install -y git
+          REPO_DIR="/opt/gies-coffee"
+          sudo rm -rf "$REPO_DIR"
+          sudo git clone https://github.com/social-engineer-ai/BDI_GiesCofeeShop.git "$REPO_DIR"
+          sudo chmod +x "$REPO_DIR/deploy/setup.sh"
+          sudo bash "$REPO_DIR/deploy/setup.sh"
+          echo "=== Bootstrap completed at $(date) ==="
+
+Outputs:
+  PublicIP:
+    Description: Public IP of the Coffee Shop instance
+    Value: !GetAtt CoffeeShopInstance.PublicIp
+
+  WebAppURL:
+    Description: URL for the Streamlit dashboard
+    Value: !Sub 'http://${CoffeeShopInstance.PublicIp}:8501'
+
+  DatabaseEndpoint:
+    Description: MySQL connection string for students
+    Value: !Sub 'mysql -h ${CoffeeShopInstance.PublicIp} -u student -p gies_coffee_shop'
+
+  SSHCommand:
+    Description: SSH into the instance
+    Value: !Sub 'ssh ec2-user@${CoffeeShopInstance.PublicIp}'

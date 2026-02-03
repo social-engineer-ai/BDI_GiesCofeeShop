@@ -1,0 +1,19 @@
+[Unit]
+Description=Gies Coffee Shop Streamlit Application
+After=network.target mariadb.service
+Requires=mariadb.service
+
+[Service]
+Type=simple
+User=ec2-user
+Group=ec2-user
+WorkingDirectory=/opt/gies-coffee/app
+ExecStart=/opt/gies-coffee/venv/bin/streamlit run app.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+Environment="HOME=/home/ec2-user"
+
+[Install]
+WantedBy=multi-user.target
